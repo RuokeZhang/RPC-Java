@@ -1,28 +1,23 @@
 package common.serializer.myserializer;
 
 import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.Kryo.DefaultInstantiatorStrategy;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
-
 import com.kama.pojo.User;
 import common.exception.SerializeException;
+import org.objenesis.strategy.StdInstantiatorStrategy;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 
 
 
-
 public class KryoSerializer implements Serializer {
     /**
-     * Kryo 不是线程安全的，使用 ThreadLocal 隔离实例。
+     * Kryo 不是线程安全的，这里用 ThreadLocal 隔离实例
      */
-    private static final ThreadLocal<Kryo> KRYO_THREAD_LOCAL = ThreadLocal.withInitial(() -> {
-        Kryo kryo = new Kryo();
-        // 允许未注册类序列化，增强通用性（如需极致性能可改为 true 并手动注册）
-        kryo.setRegistrationRequired(false);
-        return kryo;
-    });
+    private static final ThreadLocal<Kryo> KRYO_THREAD_LOCAL = ThreadLocal.withInitial(KryoSerializer::buildKryo);
 
     @Override
     public byte[] serialize(Object obj) {
@@ -34,7 +29,7 @@ public class KryoSerializer implements Serializer {
              Output output = new Output(byteArrayOutputStream)) {
 
             Kryo kryo = KRYO_THREAD_LOCAL.get();
-            kryo.writeObject(output, obj); // 使用 Kryo 写入对象
+            kryo.writeClassAndObject(output, obj); // 写入类 ID + 对象，使用注册表避免反射
             return output.toBytes(); // 返回字节数组
 
         } catch (Exception e) {
@@ -51,10 +46,8 @@ public class KryoSerializer implements Serializer {
         try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);
              Input input = new Input(byteArrayInputStream)) {
 
-            // 根据 messageType 来反序列化不同的类
-            Class<?> clazz = getClassForMessageType(messageType);
-            Kryo kryo = KRYO_THREAD_LOCAL.get();
-            return kryo.readObject(input, clazz); // 使用 Kryo 反序列化对象
+            // 依赖已注册的类 ID -> Class 映射，无需反射；messageType 可忽略
+            return KRYO_THREAD_LOCAL.get().readClassAndObject(input);
 
         } catch (Exception e) {
             throw new SerializeException("Deserialization failed");
@@ -66,12 +59,15 @@ public class KryoSerializer implements Serializer {
         return 2;
     }
 
-    private Class<?> getClassForMessageType(int messageType) {
-        if (messageType == 1) {
-            return User.class;  // 假设我们在此反序列化成 User 类
-        } else {
-            throw new SerializeException("Unknown message type: " + messageType);
-        }
+    private static Kryo buildKryo() {
+        Kryo kryo = new Kryo();
+        // 强制要求注册，序列化仅写入类 ID，体积更小
+        kryo.setRegistrationRequired(true);
+        // 使用 Objenesis 跳过构造方法，避免副作用；DefaultInstantiatorStrategy 内置 ASM 生成专用序列化器
+        kryo.setInstantiatorStrategy(new DefaultInstantiatorStrategy(new StdInstantiatorStrategy()));
+        // 预注册类并分配稳定的 ID，启用 ASM 生成专用序列化器
+        kryo.register(User.class, 1);
+        return kryo;
     }
 
     @Override
