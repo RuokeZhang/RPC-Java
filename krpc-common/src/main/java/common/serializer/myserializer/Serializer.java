@@ -26,6 +26,7 @@ public interface Serializer {
             serializerMap.put(2, new KryoSerializer());
             serializerMap.put(3, new HessianSerializer());
             serializerMap.put(4, new ProtostuffSerializer());
+            serializerMap.put(5, new ProtobufSerializer());
         }
         return serializerMap.get(code); // 如果不存在，则返回 null
     }
