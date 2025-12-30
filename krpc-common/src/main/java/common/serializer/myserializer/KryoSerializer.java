@@ -14,11 +14,15 @@ import java.io.ByteArrayOutputStream;
 
 
 public class KryoSerializer implements Serializer {
-    private Kryo kryo;
-
-    public KryoSerializer() {
-        this.kryo = new Kryo();
-    }
+    /**
+     * Kryo 不是线程安全的，使用 ThreadLocal 隔离实例。
+     */
+    private static final ThreadLocal<Kryo> KRYO_THREAD_LOCAL = ThreadLocal.withInitial(() -> {
+        Kryo kryo = new Kryo();
+        // 允许未注册类序列化，增强通用性（如需极致性能可改为 true 并手动注册）
+        kryo.setRegistrationRequired(false);
+        return kryo;
+    });
 
     @Override
     public byte[] serialize(Object obj) {
@@ -29,6 +33,7 @@ public class KryoSerializer implements Serializer {
         try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
              Output output = new Output(byteArrayOutputStream)) {
 
+            Kryo kryo = KRYO_THREAD_LOCAL.get();
             kryo.writeObject(output, obj); // 使用 Kryo 写入对象
             return output.toBytes(); // 返回字节数组
 
@@ -48,6 +53,7 @@ public class KryoSerializer implements Serializer {
 
             // 根据 messageType 来反序列化不同的类
             Class<?> clazz = getClassForMessageType(messageType);
+            Kryo kryo = KRYO_THREAD_LOCAL.get();
             return kryo.readObject(input, clazz); // 使用 Kryo 反序列化对象
 
         } catch (Exception e) {
