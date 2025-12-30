@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.kama.integration.NettyRpcIntegrationTest
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.422 s -- in com.kama.integration.NettyRpcIntegrationTest

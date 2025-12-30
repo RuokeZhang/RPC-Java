@@ -17,6 +17,8 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 
 @Slf4j
@@ -37,6 +39,7 @@ public class ClientProxy implements InvocationHandler {
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         //构建request
         RpcRequest request = RpcRequest.builder()
+                .requestId(UUID.randomUUID().toString())
                 .interfaceName(method.getDeclaringClass().getName())
                 .methodName(method.getName())
                 .params(args).paramsType(method.getParameterTypes()).build();
@@ -49,7 +52,7 @@ public class ClientProxy implements InvocationHandler {
             return null;
         }
         //数据传输
-        RpcResponse response;
+        CompletableFuture<RpcResponse> responseFuture;
         //后续添加逻辑：为保持幂等性，只对白名单上的服务进行重试
         // 如果启用重试机制，先检查是否需要重试
         String methodSignature = getMethodSignature(request.getInterfaceName(), method);
@@ -58,29 +61,34 @@ public class ClientProxy implements InvocationHandler {
         rpcClient = new NettyRpcClient(serviceAddress);
         if (serviceCenter.checkRetry(serviceAddress, methodSignature)) {
             //调用retry框架进行重试操作
-            try {
-                log.info("尝试重试调用服务: {}", methodSignature);
-                response = new GuavaRetry().sendServiceWithRetry(request, rpcClient);
-            } catch (Exception e) {
-                log.error("重试调用失败: {}", methodSignature, e);
-                circuitBreaker.recordFailure();
-                throw e;  // 将异常抛给调用者
-            }
+            log.info("尝试重试调用服务: {}", methodSignature);
+            responseFuture = CompletableFuture.supplyAsync(() -> new GuavaRetry().sendServiceWithRetry(request, rpcClient));
         } else {
             //只调用一次
-            response = rpcClient.sendRequest(request);
+            responseFuture = rpcClient.sendRequest(request);
         }
-        //记录response的状态，上报给熔断器
-        if (response != null) {
-            if (response.getCode() == 200) {
+        CompletableFuture<Object> mappedFuture = responseFuture.thenApply(response -> {
+            if (response != null && response.getCode() == 200) {
                 circuitBreaker.recordSuccess();
-            } else if (response.getCode() == 500) {
+                log.info("收到响应: {} 状态码: {}", request.getInterfaceName(), response.getCode());
+                return response.getData();
+            } else {
                 circuitBreaker.recordFailure();
+                log.warn("收到失败响应或空响应: {}", response);
+                return response != null ? response.getData() : null;
             }
-            log.info("收到响应: {} 状态码: {}", request.getInterfaceName(), response.getCode());
-        }
+        }).exceptionally(ex -> {
+            circuitBreaker.recordFailure();
+            log.error("调用过程中发生异常: {}", ex.getMessage(), ex);
+            throw new RuntimeException(ex);
+        });
 
-        return response != null ? response.getData() : null;
+        // 如果用户方法返回 CompletableFuture，则直接返回异步结果
+        if (CompletableFuture.class.isAssignableFrom(method.getReturnType())) {
+            return mappedFuture;
+        }
+        // 否则保持兼容，阻塞等待结果
+        return mappedFuture.join();
     }
 
     public <T> T getProxy(Class<T> clazz) {

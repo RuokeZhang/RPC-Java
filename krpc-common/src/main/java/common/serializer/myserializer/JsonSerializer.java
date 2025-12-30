@@ -42,7 +42,7 @@ public class JsonSerializer implements Serializer {
                 RpcResponse response = JSON.parseObject(bytes, RpcResponse.class);
                 // 如果类型为空，说明返回错误
                 if(response.getDataType()==null){
-                    obj = RpcResponse.fail("类型为空");
+                    obj = RpcResponse.fail("类型为空", response.getRequestId());
                     break;
                 }
                 Class<?> dataType = response.getDataType();

@@ -5,8 +5,7 @@ import common.message.RpcRequest;
 import common.message.RpcResponse;
 
 
-
 public interface RpcClient {
-    RpcResponse sendRequest(RpcRequest request);
+    java.util.concurrent.CompletableFuture<RpcResponse> sendRequest(RpcRequest request);
     void close();
 }

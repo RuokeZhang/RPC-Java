@@ -46,7 +46,7 @@ public class NettyRpcServerHandler extends SimpleChannelInboundHandler<RpcReques
         if (!rateLimit.getToken()) {
             //如果获取令牌失败，进行限流降级，快速返回结果
             log.warn("服务限流，接口: {}", interfaceName);
-            return RpcResponse.fail("服务限流，接口 " + interfaceName + " 当前无法处理请求。请稍后再试。");
+            return RpcResponse.fail("服务限流，接口 " + interfaceName + " 当前无法处理请求。请稍后再试。", rpcRequest.getRequestId());
         }
 
         //得到服务端相应服务实现类
@@ -56,10 +56,10 @@ public class NettyRpcServerHandler extends SimpleChannelInboundHandler<RpcReques
         try {
             method = service.getClass().getMethod(rpcRequest.getMethodName(), rpcRequest.getParamsType());
             Object invoke = method.invoke(service, rpcRequest.getParams());
-            return RpcResponse.sussess(invoke);
+            return RpcResponse.sussess(invoke, rpcRequest.getRequestId());
         } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             log.error("方法执行错误，接口: {}, 方法: {}", interfaceName, rpcRequest.getMethodName(), e);
-            return RpcResponse.fail("方法执行错误");
+            return RpcResponse.fail("方法执行错误", rpcRequest.getRequestId());
         }
     }
 }

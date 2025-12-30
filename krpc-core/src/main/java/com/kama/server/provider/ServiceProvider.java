@@ -22,25 +22,35 @@ public class ServiceProvider {
     private ServiceRegister serviceRegister;
     //限流器
     private RateLimitProvider rateLimitProvider;
+    // 是否向注册中心注册，测试场景可关闭
+    private boolean enableRegister = true;
 
     public ServiceProvider(String host, int port) {
+        this(host, port, true);
+    }
+
+    public ServiceProvider(String host, int port, boolean enableRegister) {
         //需要传入服务端自身的网络地址
         this.host = host;
         this.port = port;
+        this.enableRegister = enableRegister;
         this.interfaceProvider = new HashMap<>();
-        this.serviceRegister = new NacosServiceRegister();
         this.rateLimitProvider = new RateLimitProvider();
+        //仅在需要注册时才初始化 Nacos 客户端，避免本地测试强依赖注册中心
+        this.serviceRegister = enableRegister ? new NacosServiceRegister() : null;
     }
 
     public void provideServiceInterface(Object service) {
-        String serviceName = service.getClass().getName();
+
         Class<?>[] interfaceName = service.getClass().getInterfaces();
 
         for (Class<?> clazz : interfaceName) {
             //本机的映射表
             interfaceProvider.put(clazz.getName(), service);
-            //在注册中心注册服务
-            serviceRegister.register(clazz, new InetSocketAddress(host, port));
+            if (enableRegister && serviceRegister != null) {
+                //在注册中心注册服务
+                serviceRegister.register(clazz, new InetSocketAddress(host, port));
+            }
         }
     }
 

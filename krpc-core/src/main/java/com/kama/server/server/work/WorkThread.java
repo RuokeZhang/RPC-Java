@@ -46,10 +46,10 @@ public class WorkThread implements Runnable {
         try {
             method = service.getClass().getMethod(rpcRequest.getMethodName(), rpcRequest.getParamsType());
             Object invoke = method.invoke(service, rpcRequest.getParams());
-            return RpcResponse.sussess(invoke);
+            return RpcResponse.sussess(invoke, rpcRequest.getRequestId());
         } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             e.printStackTrace();
-            return RpcResponse.fail("方法执行错误");
+            return RpcResponse.fail("方法执行错误", rpcRequest.getRequestId());
         }
     }
 }

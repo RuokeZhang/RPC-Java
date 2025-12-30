@@ -24,7 +24,10 @@ public class NettyRpcServer implements RpcServer {
 
     @Override
     public void start(int port) {
+        // 定义线程组
+        // 1. 主线程组: 负责处理客户端连接请求
         NioEventLoopGroup bossGroup = new NioEventLoopGroup();
+        // 2. 工作线程组: 负责处理客户端连接后的IO操作
         NioEventLoopGroup workGroup = new NioEventLoopGroup();
         log.info("Netty服务端启动了");
 
@@ -32,7 +35,7 @@ public class NettyRpcServer implements RpcServer {
             ServerBootstrap serverBootstrap = new ServerBootstrap();
             serverBootstrap.group(bossGroup, workGroup)
                     .channel(NioServerSocketChannel.class)
-                    .childHandler(new NettyServerInitializer(serviceProvider));
+                    .childHandler(new NettyServerInitializer(serviceProvider));//一旦有客户端连接，就会执行NettyServerInitializer的initChannel方法
 
             // 同步阻塞，绑定端口启动服务
             channelFuture = serverBootstrap.bind(port).sync();

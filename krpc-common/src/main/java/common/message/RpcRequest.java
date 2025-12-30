@@ -15,6 +15,7 @@ import java.io.Serializable;
 @Builder
 public class RpcRequest implements Serializable {
     //接口名、方法名、参数列表参数类型
+    private String requestId;
     private String interfaceName;
 
     private String methodName;

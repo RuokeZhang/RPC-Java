@@ -1,9 +1,9 @@
 package com.kama.client.netty;
 
 import common.message.RpcResponse;
+import com.kama.client.rpcclient.impl.NettyRpcClient;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.util.AttributeKey;
 import lombok.extern.slf4j.Slf4j;
 
 
@@ -13,10 +13,9 @@ public class NettyClientHandler extends SimpleChannelInboundHandler<RpcResponse>
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RpcResponse response) throws Exception {
-        // 接收到response, 给channel设计别名，让sendRequest里读取response
-        AttributeKey<RpcResponse> RESPONSE_KEY = AttributeKey.valueOf("RPCResponse");
-        // 将响应存入 Channel 属性
-        ctx.channel().attr(RESPONSE_KEY).set(response);
+        // 收到响应后，根据 requestId 回填对应的 future
+        NettyRpcClient.completeResponse(response);
+        // 当前实现使用短连接，收到结果后关闭通道
         ctx.channel().close();
     }
 
