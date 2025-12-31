@@ -15,4 +15,6 @@ target/
 # OS
 .DS_Store
 
+docs/Netty长连接与半包问题解决方案.md
+
 

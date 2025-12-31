@@ -2,6 +2,7 @@
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/cache/ServiceCache.java
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/circuitbreaker/CircuitBreaker.java
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/circuitbreaker/CircuitBreakerProvider.java
+/Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/netty/ChannelProvider.java
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/netty/NettyClientHandler.java
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/netty/NettyClientInitializer.java
 /Users/ruoke/Documents/personal_projects/RPC-Java/krpc-core/src/main/java/com/kama/client/proxy/ClientProxy.java

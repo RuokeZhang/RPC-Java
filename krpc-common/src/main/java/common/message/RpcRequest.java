@@ -23,4 +23,8 @@ public class RpcRequest implements Serializable {
     private Object[] params;
 
     private Class<?>[] paramsType;
+
+    // 心跳检测标识
+    @Builder.Default
+    private boolean heartBeat = false;
 }
