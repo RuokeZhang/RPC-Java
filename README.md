@@ -1,68 +1,53 @@
-## KRPC (Version 5)
-
-A minimal Java RPC framework demo.
-
-### Modules
+## Modules
 - krpc-api: public interfaces and models
 - krpc-common: message schema, serializers, codec
 - krpc-core: client/server, load-balancer, retry, breaker
 - krpc-provider: service implementation (provider demo)
 - krpc-consumer: client caller (consumer demo)
 
-### How it works
-- Provider registers and exposes services
-- Consumer calls via dynamic proxy
-- Netty transport with pluggable serialization
-- Service discovery and load balancing
+## Test
+```shell
+mvn test -Dtest=NettyRpcIntegrationTest -pl krpc-core
+```
+## 请求可靠性
+### Guava Retry(Client)
+[repo](https://github.com/rholder/guava-retrying)
 
-### Quick start
-1. Run provider: `ProviderTest`
-2. Run consumer: `ConsumerTest`
+Guava Retry是 Google Guava 提供的一个重试工具库。  
+在client 调用一个方法时，需要检查该方法是否支持 retry. 
+- 先查本地缓存，看这个方法能否 retry
+- 若缓存没有，去Nacos 找该 instance 的 metadata,里面有记录哪些方法是可以 retry 的
+- 如果该方法支持 retry,则调用可重试版本的 sendRequest
 
-That's it.
+### Circuit Breaker(Client)
+客户端在 invoke()这个方法的时候，获取到 **serviceName+method** 对应的熔断器，检查是否 allowRequest。熔断器与具体哪个 nacos instance 无关
 
+```java
+enum CircuitBreakerState {
+    CLOSED,  // 关闭状态（正常工作）
+    OPEN,    // 开启状态（熔断中，拒绝请求）
+    HALF_OPEN// 半开启状态（尝试恢复）
+}
+```
+- 如果 invoke()调用成功了，会增加 successCount, 这个 count 可能会影响到当前 breaker 的状态改变
+- 如果当前 breaker 是 CLOSED，那么可以正常工作
+- 如果是 OPEN，需要判断当前请求的事件和上次请求失败时间的**差距**是否大于某个阈值。如果大于了，可以改成 HALF OPEN 状态
+- 如果是 HALF_OPEN, 那么累计 requestCount，允许请求被发送
 
-## Netty
+### 限流(Server)
+粒度是接口名
+```java
+// 令牌产生速率（单位：ms）
+private final int rate;
+// 桶容量
+private final int capacity;
+// 当前桶容量
+private volatile int curCapacity;
+// 上次请求时间戳
+private volatile long lastTimestamp;
+```
+- 如果令牌够，直接返回 True
+- 如果不够了，检查当前事件-lastTimestamp是否大于 rate. 如果大于，计算一下这段时间之内生成的令牌数量，并加入令牌同
+- 如果小于，则返回 False
 
-- 基于 NIO 的多路复用框架，用 Pipeline 组织编码 / 解码 / 业务处理
-
-- 服务端（ServerBootstrap）
-  - 线程模型：boss 负责新连接，worker 负责 IO
-  - Channel：`NioServerSocketChannel`
-  - Pipeline：
-    - Encoder / Decoder：将 `RpcRequest`、`RpcResponse` 与字节流互转
-    - Handler：拿到 `RpcRequest` 的 `interfaceName` 与 `requestId`，从本地映射表取得 service 实例，反射调用后返回带相同 `requestId` 的 `RpcResponse`
-  - 关键代码：
-    ```java
-    pipeline.addLast(new MyEncoder(Serializer.getSerializerByCode(3)));
-    pipeline.addLast(new MyDecoder());
-    pipeline.addLast(new NettyRpcServerHandler(serviceProvider));
-    ```
-
-- 客户端（ClientBootstrap）
-  - 服务发现：
-    ```java
-    InetSocketAddress serviceAddress = serviceCenter.serviceDiscovery(request);
-    rpcClient = new NettyRpcClient(serviceAddress);
-    ```
-  - 发送请求（异步 Future）：
-    ```java
-    CompletableFuture<RpcResponse> future = rpcClient.sendRequest(request);
-    // 如果业务方法返回 Future，可直接返回；否则 join 同步拿结果
-    ```
-  - 短连接流程：
-    1) `bootstrap.connect(host, port)` 建立连接  
-    2) `writeAndFlush(request)` 发送  
-    3) `NettyClientHandler` 收到响应后，按 `requestId` 完成对应 Future，并关闭通道
-  - 业务侧处理：
-    ```java
-    CompletableFuture<Object> mapped = future.thenApply(resp -> resp.getData());
-    // 返回 CompletableFuture 或 mapped.join()
-    ```
-
-- 请求 / 响应结构
-  - `RpcRequest` 增加 `requestId`，用于匹配响应
-  - `RpcResponse` 同样携带 `requestId`
-  - 客户端维护 `PENDING_FUTURES<requestId, CompletableFuture<RpcResponse>>`，用于路由响应
-
-
+server 在getResponse()这一步去检查令牌是否充足，来判断是否调用对应的方法
