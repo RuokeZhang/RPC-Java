@@ -1,12 +1,12 @@
 package com.kama.client.rpcclient.impl;
 
+import com.kama.client.netty.ChannelProvider;
 import com.kama.client.netty.NettyClientInitializer;
 import com.kama.client.rpcclient.RpcClient;
 import common.message.RpcRequest;
 import common.message.RpcResponse;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -33,12 +33,19 @@ public class NettyRpcClient implements RpcClient {
         this.address = serviceAddress;
     }
 
-    //netty客户端初始化
+    // Netty客户端初始化
     static {
         eventLoopGroup = new NioEventLoopGroup();
         bootstrap = new Bootstrap();
         bootstrap.group(eventLoopGroup).channel(NioSocketChannel.class)
                 .handler(new NettyClientInitializer());
+    }
+
+    /**
+     * 获取 Bootstrap 实例，供 ChannelProvider 使用
+     */
+    public static Bootstrap getBootstrap() {
+        return bootstrap;
     }
 
     @Override
@@ -48,35 +55,30 @@ public class NettyRpcClient implements RpcClient {
         }
         CompletableFuture<RpcResponse> responseFuture = new CompletableFuture<>();
         PENDING_FUTURES.put(request.getRequestId(), responseFuture);
-        //从注册中心获取host,port
+
         if (address == null) {
             log.error("服务发现失败，返回的地址为 null");
             completeExceptionally(request.getRequestId(), new IllegalStateException("服务发现失败，地址为 null"));
             return responseFuture;
         }
-        String host = address.getHostName();
-        int port = address.getPort();
+
         try {
-            ChannelFuture channelFuture = bootstrap.connect(host, port);
-            channelFuture.addListener(connectFuture -> {
-                if (!connectFuture.isSuccess()) {
-                    log.error("连接远程服务失败: {}", connectFuture.cause().getMessage(), connectFuture.cause());
-                    completeExceptionally(request.getRequestId(), connectFuture.cause());
-                    return;
+            // 使用连接池获取复用的 Channel
+            Channel channel = ChannelProvider.getChannel(address, bootstrap);
+            if (channel == null || !channel.isActive()) {
+                log.error("获取连接失败: {}", address);
+                completeExceptionally(request.getRequestId(), new IllegalStateException("获取连接失败"));
+                return responseFuture;
+            }
+
+            // 发送请求
+            channel.writeAndFlush(request).addListener(writeFuture -> {
+                if (!writeFuture.isSuccess()) {
+                    log.error("发送请求失败: {}", writeFuture.cause().getMessage(), writeFuture.cause());
+                    completeExceptionally(request.getRequestId(), writeFuture.cause());
+                    // 发送失败时移除该连接，下次重新建立
+                    ChannelProvider.removeChannel(address);
                 }
-                Channel channel = ((ChannelFuture) connectFuture).channel();
-                channel.writeAndFlush(request).addListener(writeFuture -> {
-                    if (!writeFuture.isSuccess()) {
-                        log.error("发送请求失败: {}", writeFuture.cause().getMessage(), writeFuture.cause());
-                        completeExceptionally(request.getRequestId(), writeFuture.cause());
-                    }
-                });
-                channel.closeFuture().addListener(closeFuture -> {
-                    CompletableFuture<RpcResponse> pending = PENDING_FUTURES.get(request.getRequestId());
-                    if (pending != null && !pending.isDone()) {
-                        completeExceptionally(request.getRequestId(), new IllegalStateException("连接提前关闭，未收到响应"));
-                    }
-                });
             });
         } catch (Exception e) {
             log.error("发送请求时发生异常: {}", e.getMessage(), e);
@@ -88,6 +90,8 @@ public class NettyRpcClient implements RpcClient {
     // 优雅关闭 Netty 资源
     public void close() {
         try {
+            // 关闭所有连接池中的连接
+            ChannelProvider.closeAll();
             if (eventLoopGroup != null) {
                 eventLoopGroup.shutdownGracefully().sync();
             }
