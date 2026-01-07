@@ -27,6 +27,7 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <protobuf.version>3.25.3</protobuf.version>
     </properties>
 
     <build>
@@ -43,10 +44,20 @@
                 <artifactId>protobuf-maven-plugin</artifactId>
                 <version>0.6.1</version>
                 <configuration>
-                    <protocArtifact>com.google.protobuf:protoc:3.25.3:exe:${os.detected.classifier}</protocArtifact>
+                    <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
                     <outputDirectory>${project.build.directory}/generated-sources/protobuf/java</outputDirectory>
                     <clearOutputDirectory>true</clearOutputDirectory>
                 </configuration>
+                <dependencies>
+                    <!-- 显式声明 protoc 依赖，便于 Eclipse/M2E 正确解析 classifier -->
+                    <dependency>
+                        <groupId>com.google.protobuf</groupId>
+                        <artifactId>protoc</artifactId>
+                        <version>${protobuf.version}</version>
+                        <classifier>${os.detected.classifier}</classifier>
+                        <type>exe</type>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
                         <goals>
