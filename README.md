@@ -58,7 +58,7 @@ private volatile long lastTimestamp;
 server 在getResponse()这一步去检查令牌是否充足，来判断是否调用对应的方法
 
 ## Load Balance
-定义了统一接口，三种实现方式
+定义了统一接口，多种实现方式
 ```java
 public interface LoadBalance {
     String balance(List<String> addressList);
@@ -69,9 +69,14 @@ public interface LoadBalance {
 ### Round Robin
 - 用AtomicInteger维护一个索引，每次调用.balance的时候，索引+1，并且对server列表长度取模，得到目标server
 - 列表用的是CopyOnWriteArrayList
-
 ### Random
 创建了Random()实例，随机返回一个server instance
+### Weighted Round Robin
+- 平滑加权轮询（类似 nginx），支持 setWeight / setWeights 设置权重，默认权重为 1
+- 每次请求根据权重比例分配，节点列表变更时自动剔除失效节点
+### Least Connection
+- 按当前在途连接数选择负载最低节点，请求结束后需调用 releaseConnection 归还计数
+- 节点列表变更时自动剔除失效节点，避免计数泄漏
 
 ## 粘包 / 拆包
 粘包：发送方发送了两个或多个数据包，但接收方一次性收到了这些数据包的合并结果。  
