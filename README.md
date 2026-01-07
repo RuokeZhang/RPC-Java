@@ -1,14 +1,84 @@
-## Modules
-- krpc-api: public interfaces and models
-- krpc-common: message schema, serializers, codec
-- krpc-core: client/server, load-balancer, retry, breaker
-- krpc-provider: service implementation (provider demo)
-- krpc-consumer: client caller (consumer demo)
+## RPC和HTTP的区别
+- RPC has small header overhead, 能灵活定制传输格式
+- 服务发现：服务提供者启动时自动注册，消费者通过注册中心动态发现服务地址
+- 负载均衡：RPC 在客户端实现负载均衡
+- 容错机制：我的项目实现了重试（Retry）、熔断（Circuit Breaker）和限流（Rate Limiting）
 
-## Test
-```shell
-mvn test -Dtest=NettyRpcIntegrationTest -pl krpc-core
+
+## Serialization
+### Kyro
+速度快，体积小，只支持序列化和反序列化Java对象，线程不安全
+
+1. 类注册（Class Registration）。在kyro序列化某一个类的对象之前，它会注册这个类，给这个类分配一个整数ID. ```kryo.register(User.class, 1);```因此在序列化时，只需要写入类的ID（1-4字节），效率更高
+2. 序列化
+    - 用 ASM 框架直接生成一段 Java 字节码，这段代码就是针对该类的序列化 / 反序列化逻辑
+    - 把生成的字节码加载到 JVM 中，得到一个 专用的序列化器类
+    - 后续对该类的对象进行序列化时，直接调用这个专用类的方法，完全不走反射
+3. 反序列化
+    - 从字节流里面读class ID, 然后从ClassResolver里面找到对应的class
+    - 使用Objenesis创建对象，这样可以跳过构造方法里的业务逻辑，也可以创建某些缺少无参构造方法的类
+
+### Hessian
+- 跨语言，效率略低于kyro
+- 每次调用 serialize/deserialize 都会创建局部的 HessianOutput/Input
+- HessianInput绑定对应的ByteArrayInputStream即可
+- 它不需要 IDL。只要两端的字段名匹配即可。
+
+### Protobuf
+1. 定义.proto 文件：krpc-common/src/main/proto/com/kama/proto/User.proto
+2. 编译后，protoc生成接口文件krpc-common/target/generated-sources/protobuf/java/com/kama/proto/UserProto.java。这里还会为该类生成一个 parser。另外，protoc生成的类一定实现MessageLite接口。
+3. 做序列化的时候，直接调用对象（messageLite 实例）的toByteArray()方法。
+4. deserializer维护messageType -> Parser映射。在调用 deserialize 的时候，需要指定对应的 messageType, 取出对应的 parser，然后直接使用 parser 的parseFrom function 来反序列化出对象
+
+
+## Netty
+### BIO
+每次调用 sendRequest 时，都会新建一个 Socket 连接到服务器(TCP 三次握手+四次挥手)
+
+### 连接池
+```krpc-core/src/main/java/com/kama/client/netty/ChannelProvider.java```
+
+```java
+private static final Map<String, Channel> channelPool = new ConcurrentHashMap<>();//连接池
 ```
+实现了这个函数
+
+```java
+getChannel(InetSocketAddress address, Bootstrap bootstrap)
+```
+
+检查对于这个 address 有没有 active 的 channel，如果有，直接返回该 channel；如果没有，用 boostrap 创建一个新的 channel
+
+```java
+ChannelFuture future = bootstrap.connect(address).sync();
+```
+如果有 channel 被关闭了，则把该 channel 从连接池中移除
+```java
+channel.closeFuture().addListener(closeFuture -> {
+    log.info("连接关闭，从连接池移除: {}", key);
+    channelPool.remove(key);
+});
+```
+
+### NettyClientInitializer
+配置 IdleStateHandler, Decoder, Encoder, NettyClientHandler
+- IdleStateHandler: 如果这个 channel 超过一定时间没有读事件，则触发一个READER_IDLE事件
+-  NettyClientHandler：
+    - 重写userEventTriggered function，用来响应READER_IDLE事件，具体是发送一个心跳检测
+    - 重写channelRead0 function。作用是收到响应后，根据 response 中携带的requestId 回填对应的 responseFuture
+
+
+### Server
+- 创建两个线程池，一个用于处理新连接，另一个负责连接的 IO 事件
+- Channel: 一般就用NioServerSocketChannel
+- Pipeline: 定义 LengthFieldBasedFrameDecoder, IdleStateHandler, MyEncoder, MyDecoder和NettyRpcServerHandler
+- LengthFieldBasedFrameDecoder
+- NettyRpcServerHandler：
+    - 接收 RpcRequest, 拿到它的 Interface,再从本机的映射表拿到对应的 service,开始进行方法调用
+    - 若收到心跳检测，则构建并发送心跳响应。客户端收到心跳响应之后，定时器会被重置
+    - 重写userEventTriggered，若收到了READER_IDLE事件（设置为 30 秒，即 client 的两倍时间），则直接关闭 channel
+
+
 ## 请求可靠性
 ### Guava Retry(Client)
 [repo](https://github.com/rholder/guava-retrying)
@@ -99,3 +169,22 @@ pipeline.addLast(new LengthFieldBasedFrameDecoder(
 ));
 ```
 接收端使用LengthFieldBasedFrameDecoder，读取content的长度，然后自动“粘合”或“拆分”字节流，保证传给下一个handler的 ByteBuf是一帧完整的数据，myDecoder直接把content的字节流转换成Java对象即可
+
+## Nacos
+1. server 注册现有的服务
+    ```java
+    public void register(Class<?> clazz, InetSocketAddress serviceAddress) 
+    ```
+    - 创建一个 Nacos Instance, 设置 IP, port, weight
+    - 注册这个服务：namingService.registerInstance(serviceName, instance);
+    - serviceName 是这个实现类的全限定名
+2. clientProxy 调用invoke()函数
+    - 首先根据服务名返回服务器实例列表
+    - load balance选择一个实例并返回
+    - 用实例地址创建NettyRpcClient
+    - responseFuture = rpcClient.sendRequest(request);发送请求
+        - 创建一个Future，把 requestId 和 Future缓存到PENDING_FUTURES map 中
+        - 使用连接池获取复用的 Channel
+        - channel.writeAndFlush(request)发送请求
+        - 当 clientHandler（另一个线程）收到响应时，根据 requestId 回填对应的 future，**不关闭 channel**
+        - 主线程返回response
