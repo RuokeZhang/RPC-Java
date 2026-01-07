@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 
 @Slf4j
@@ -22,6 +23,9 @@ public class NacosServiceCenter implements ServiceCenter {
 
     // 本地缓存，用于缓存可重试方法
     private final Map<String, Set<String>> retryMethodCache = new ConcurrentHashMap<>();
+
+    // 本地缓存，用于兜底服务地址（避免 Nacos 暂时不可用时完全不可用）
+    private final Map<String, List<String>> serviceAddressCache = new ConcurrentHashMap<>();
 
     // 负载均衡器，默认使用轮询
     private final LoadBalance loadBalance;
@@ -65,10 +69,21 @@ public class NacosServiceCenter implements ServiceCenter {
             // 负载均衡得到地址
             String address = loadBalance.balance(addressList);
             log.info("服务发现成功 - 服务名: {}, 选择地址: {}", serviceName, address);
+            // 更新本地缓存
+            serviceAddressCache.put(serviceName, new CopyOnWriteArrayList<>(addressList));
             return parseAddress(address);
         } catch (NacosException e) {
-            log.error("服务发现失败，服务名：{}", serviceName, e);
+            log.error("服务发现失败，服务名：{}，尝试使用本地缓存", serviceName, e);
         }
+
+        // Nacos 异常或不可达时，尝试使用本地缓存兜底
+        List<String> cachedAddresses = serviceAddressCache.get(serviceName);
+        if (cachedAddresses != null && !cachedAddresses.isEmpty()) {
+            String cachedAddress = loadBalance.balance(cachedAddresses);
+            log.warn("使用本地缓存服务地址 - 服务名: {}, 选择地址: {}", serviceName, cachedAddress);
+            return parseAddress(cachedAddress);
+        }
+        log.warn("服务发现失败且无缓存可用，服务名: {}", serviceName);
         return null;
     }
 

@@ -34,6 +34,11 @@ enum CircuitBreakerState {
 - 如果是 OPEN，需要判断当前请求的事件和上次请求失败时间的**差距**是否大于某个阈值。如果大于了，可以改成 HALF OPEN 状态
 - 如果是 HALF_OPEN, 那么累计 requestCount，允许请求被发送
 
+### Service Discovery Fallback(Client)
+- 服务发现优先从 Nacos 获取健康实例；若 Nacos 不可达，回退到本地缓存的上次成功实例列表。
+- 负载均衡在缓存列表上继续工作，避免注册中心短暂不可用导致完全中断。
+- 成功从 Nacos 拿到列表后会刷新本地缓存。
+
 ### 限流(Server)
 粒度是接口名
 ```java
@@ -51,3 +56,41 @@ private volatile long lastTimestamp;
 - 如果小于，则返回 False
 
 server 在getResponse()这一步去检查令牌是否充足，来判断是否调用对应的方法
+
+## Load Balance
+定义了统一接口，三种实现方式
+```java
+public interface LoadBalance {
+    String balance(List<String> addressList);
+    void addNode(String node);
+    void delNode(String node);
+}
+```
+### Round Robin
+- 用AtomicInteger维护一个索引，每次调用.balance的时候，索引+1，并且对server列表长度取模，得到目标server
+- 列表用的是CopyOnWriteArrayList
+
+### Random
+创建了Random()实例，随机返回一个server instance
+
+## 粘包 / 拆包
+粘包：发送方发送了两个或多个数据包，但接收方一次性收到了这些数据包的合并结果。  
+拆包：发送方发送了一个数据包，但接收方分多次才收到完整的数据。
+
+自定义协议：
+- Message Type(2 字节)：标识消息类型（请求或响应）
+- Serializer Type (2 字节)：标识使用的序列化器。
+- Data Length (4 字节)：核心字段，记录后续 Body（序列化后的对象）的字节长度
+- Body (N 字节)：实际的序列化数据
+
+```java
+// 参数：最大帧长度、长度字段偏移量、长度字段长度
+pipeline.addLast(new LengthFieldBasedFrameDecoder(
+    MAX_FRAME_LENGTH,
+    4,  // lengthFieldOffset: 跳过 messageType(2) + serializerType(2)
+    4,  // lengthFieldLength: length 占 4 字节
+    0,  // lengthAdjustment: body 紧跟 length，无需调整
+    0   // initialBytesToStrip: 不跳过头部，交由 MyDecoder 解析
+));
+```
+接收端使用LengthFieldBasedFrameDecoder，读取content的长度，然后自动“粘合”或“拆分”字节流，保证传给下一个handler的 ByteBuf是一帧完整的数据，myDecoder直接把content的字节流转换成Java对象即可
